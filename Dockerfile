@@ -12,6 +12,8 @@ FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 
 COPY --from=builder /app/build/libs/*.jar app.jar
+COPY --from=builder /app/src/main/resources/ca.pem /app/ssl/ca.pem
+COPY --from=builder /app/src/main/resources/client.keystore.p12 /app/ssl/client.keystore.p12
 
 ENV SPRING_PROFILES_ACTIVE=production
 EXPOSE 8080

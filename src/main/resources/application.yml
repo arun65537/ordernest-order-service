@@ -2,6 +2,25 @@ server:
   port: 8082
 
 spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVICE_URL:kafka-877fe57-ordernest.i.aivencloud.com:14046}
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP_ID:ordernest-order-service}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    properties:
+      security:
+        protocol: ${KAFKA_SECURITY_PROTOCOL:SSL}
+      ssl:
+        truststore:
+          type: PEM
+          location: ${KAFKA_TRUSTSTORE_PATH:/app/ssl/ca.pem}
+        keystore:
+          type: PKCS12
+          location: ${KAFKA_KEYSTORE_PATH:/app/ssl/client.keystore.p12}
+          password: ${KAFKA_KEYSTORE_PASSWORD:changeit}
+
   datasource:
     url: ${DB_URL:jdbc:postgresql://ep-fragrant-unit-ailk0gqi-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require}
     username: ${DB_USERNAME}
@@ -17,6 +36,11 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
 app:
+  kafka:
+    topic:
+      payment-events: ${PAYMENT_EVENTS_TOPIC:payment.events}
+    consumer:
+      group-id: ${PAYMENT_EVENTS_CONSUMER_GROUP_ID:ordernest-order-service-payment-consumer}
   inventory:
     base-url: ${INVENTORY_API_BASE_URL:https://ordernest-inventory-service.onrender.com}
   jwt:
