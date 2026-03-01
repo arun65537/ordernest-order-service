@@ -7,6 +7,10 @@ import com.ordernest.order.dto.CreateOrderResponse;
 import com.ordernest.order.dto.OrderItemResponse;
 import com.ordernest.order.dto.OrderResponse;
 import com.ordernest.order.entity.CustomerOrder;
+import com.ordernest.order.entity.OrderStatus;
+import com.ordernest.order.entity.PaymentStatus;
+import com.ordernest.order.event.PaymentEvent;
+import com.ordernest.order.event.PaymentEventType;
 import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
 import com.ordernest.order.repository.OrderRepository;
@@ -16,10 +20,12 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class OrderService {
 
@@ -51,6 +57,8 @@ public class OrderService {
         order.setQuantity(requested);
         order.setTotalAmount(totalAmount);
         order.setCurrency(inventoryProduct.currency());
+        order.setStatus(OrderStatus.CREATED);
+        order.setPaymentStatus(PaymentStatus.PENDING);
 
         CustomerOrder saved = orderRepository.save(order);
         return new CreateOrderResponse(saved.getId());
@@ -67,6 +75,37 @@ public class OrderService {
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
+    }
+
+    @Transactional
+    public void applyPaymentEvent(PaymentEvent paymentEvent) {
+        if (paymentEvent == null || paymentEvent.orderId() == null || paymentEvent.eventType() == null) {
+            log.warn("Skipping payment event with missing required fields: {}", paymentEvent);
+            return;
+        }
+
+        UUID orderId;
+        try {
+            orderId = UUID.fromString(paymentEvent.orderId());
+        } catch (IllegalArgumentException ex) {
+            log.warn("Skipping payment event with invalid orderId: {}", paymentEvent.orderId());
+            return;
+        }
+
+        orderRepository.findById(orderId).ifPresentOrElse(
+                order -> {
+                    if (paymentEvent.eventType() == PaymentEventType.PAYMENT_SUCCESS) {
+                        order.setStatus(OrderStatus.SUCCESS);
+                        order.setPaymentStatus(PaymentStatus.SUCCESS);
+                    } else if (paymentEvent.eventType() == PaymentEventType.PAYMENT_FAILED) {
+                        order.setStatus(OrderStatus.FAILED);
+                        order.setPaymentStatus(PaymentStatus.FAILED);
+                    }
+
+                    orderRepository.save(order);
+                },
+                () -> log.warn("Payment event received for unknown orderId: {}", orderId)
+        );
     }
 
     private CustomerOrder findById(UUID orderId) {

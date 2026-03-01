@@ -68,7 +68,7 @@ public class CustomerOrder {
             createdAt = Instant.now();
         }
         if (status == null) {
-            status = OrderStatus.PENDING;
+            status = OrderStatus.CREATED;
         }
         if (paymentStatus == null) {
             paymentStatus = PaymentStatus.PENDING;
