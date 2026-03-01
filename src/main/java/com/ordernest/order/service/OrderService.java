@@ -95,10 +95,10 @@ public class OrderService {
         orderRepository.findById(orderId).ifPresentOrElse(
                 order -> {
                     if (paymentEvent.eventType() == PaymentEventType.PAYMENT_SUCCESS) {
-                        order.setStatus(OrderStatus.SUCCESS);
+                        order.setStatus(OrderStatus.CONFIRMED);
                         order.setPaymentStatus(PaymentStatus.SUCCESS);
                     } else if (paymentEvent.eventType() == PaymentEventType.PAYMENT_FAILED) {
-                        order.setStatus(OrderStatus.FAILED);
+                        order.setStatus(OrderStatus.CANCELLED);
                         order.setPaymentStatus(PaymentStatus.FAILED);
                     }
 
