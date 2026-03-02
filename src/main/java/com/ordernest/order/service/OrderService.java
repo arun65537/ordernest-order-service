@@ -9,8 +9,10 @@ import com.ordernest.order.dto.OrderResponse;
 import com.ordernest.order.entity.CustomerOrder;
 import com.ordernest.order.entity.OrderStatus;
 import com.ordernest.order.entity.PaymentStatus;
+import com.ordernest.order.entity.ShipmentStatus;
 import com.ordernest.order.event.PaymentEvent;
 import com.ordernest.order.event.PaymentEventType;
+import com.ordernest.order.event.ShipmentEvent;
 import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
 import com.ordernest.order.repository.OrderRepository;
@@ -59,6 +61,7 @@ public class OrderService {
         order.setCurrency(inventoryProduct.currency());
         order.setStatus(OrderStatus.CREATED);
         order.setPaymentStatus(PaymentStatus.PENDING);
+        order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
 
         CustomerOrder saved = orderRepository.save(order);
         return new CreateOrderResponse(saved.getId());
@@ -95,16 +98,64 @@ public class OrderService {
         orderRepository.findById(orderId).ifPresentOrElse(
                 order -> {
                     if (paymentEvent.eventType() == PaymentEventType.PAYMENT_SUCCESS) {
-                        order.setStatus(OrderStatus.SUCCESS);
-                        order.setPaymentStatus(PaymentStatus.SUCCESS);
+                        order.setStatus(OrderStatus.CONFIRMED);
+                        order.setPaymentStatus(PaymentStatus.DONE);
                     } else if (paymentEvent.eventType() == PaymentEventType.PAYMENT_FAILED) {
-                        order.setStatus(OrderStatus.FAILED);
+                        order.setStatus(OrderStatus.CANCELLED);
                         order.setPaymentStatus(PaymentStatus.FAILED);
+                        order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
                     }
 
                     orderRepository.save(order);
                 },
                 () -> log.warn("Payment event received for unknown orderId: {}", orderId)
+        );
+    }
+
+    @Transactional
+    public void applyShipmentEvent(ShipmentEvent shipmentEvent) {
+        if (shipmentEvent == null || shipmentEvent.orderId() == null || shipmentEvent.shipmentStatus() == null) {
+            log.warn("Skipping shipment event with missing required fields: {}", shipmentEvent);
+            return;
+        }
+
+        UUID orderId;
+        try {
+            orderId = UUID.fromString(shipmentEvent.orderId());
+        } catch (IllegalArgumentException ex) {
+            log.warn("Skipping shipment event with invalid orderId: {}", shipmentEvent.orderId());
+            return;
+        }
+
+        orderRepository.findById(orderId).ifPresentOrElse(
+                order -> {
+                    if (order.getStatus() != OrderStatus.CONFIRMED || order.getPaymentStatus() != PaymentStatus.DONE) {
+                        log.warn("Skipping shipment event because order is not in CONFIRMED/DONE state. orderId={}, status={}, paymentStatus={}",
+                                orderId, order.getStatus(), order.getPaymentStatus());
+                        return;
+                    }
+
+                    ShipmentStatus current = order.getShipmentStatus();
+                    ShipmentStatus next = shipmentEvent.shipmentStatus();
+
+                    if (current == next) {
+                        return;
+                    }
+
+                    boolean validTransition =
+                            (current == ShipmentStatus.NOT_CREATED && next == ShipmentStatus.CREATED)
+                                    || (current == ShipmentStatus.CREATED && next == ShipmentStatus.SHIPPED)
+                                    || (current == ShipmentStatus.SHIPPED && next == ShipmentStatus.DELIVERED);
+
+                    if (!validTransition) {
+                        log.warn("Skipping invalid shipment transition. orderId={}, current={}, next={}", orderId, current, next);
+                        return;
+                    }
+
+                    order.setShipmentStatus(next);
+                    orderRepository.save(order);
+                },
+                () -> log.warn("Shipment event received for unknown orderId: {}", orderId)
         );
     }
 
@@ -119,6 +170,7 @@ public class OrderService {
                 new OrderItemResponse(order.getProductId(), order.getProductName(), order.getQuantity(), order.getTotalAmount(), order.getCurrency()),
                 order.getStatus(),
                 order.getPaymentStatus(),
+                order.getShipmentStatus(),
                 order.getCreatedAt()
         );
     }

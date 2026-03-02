@@ -53,6 +53,10 @@ public class CustomerOrder {
     @Column(nullable = false)
     private PaymentStatus paymentStatus;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ShipmentStatus shipmentStatus;
+
     @Column
     private String currency;
 
@@ -72,6 +76,9 @@ public class CustomerOrder {
         }
         if (paymentStatus == null) {
             paymentStatus = PaymentStatus.PENDING;
+        }
+        if (shipmentStatus == null) {
+            shipmentStatus = ShipmentStatus.NOT_CREATED;
         }
     }
 }

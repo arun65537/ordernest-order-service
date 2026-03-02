@@ -39,8 +39,10 @@ app:
   kafka:
     topic:
       payment-events: ${PAYMENT_EVENTS_TOPIC:payment.events}
+      shipment-events: ${SHIPMENT_EVENTS_TOPIC:shipment.events}
     consumer:
       group-id: ${PAYMENT_EVENTS_CONSUMER_GROUP_ID:ordernest-order-service-payment-consumer}
+      shipment-group-id: ${SHIPMENT_EVENTS_CONSUMER_GROUP_ID:ordernest-order-service-shipment-consumer}
   inventory:
     base-url: ${INVENTORY_API_BASE_URL:https://ordernest-inventory-service.onrender.com}
   jwt:
