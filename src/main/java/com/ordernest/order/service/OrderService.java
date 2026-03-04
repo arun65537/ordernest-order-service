@@ -99,7 +99,7 @@ public class OrderService {
                 order -> {
                     if (paymentEvent.eventType() == PaymentEventType.PAYMENT_SUCCESS) {
                         order.setStatus(OrderStatus.CONFIRMED);
-                        order.setPaymentStatus(PaymentStatus.DONE);
+                        order.setPaymentStatus(PaymentStatus.SUCCESS);
                     } else if (paymentEvent.eventType() == PaymentEventType.PAYMENT_FAILED) {
                         order.setStatus(OrderStatus.CANCELLED);
                         order.setPaymentStatus(PaymentStatus.FAILED);
@@ -129,8 +129,8 @@ public class OrderService {
 
         orderRepository.findById(orderId).ifPresentOrElse(
                 order -> {
-                    if (order.getStatus() != OrderStatus.CONFIRMED || order.getPaymentStatus() != PaymentStatus.DONE) {
-                        log.warn("Skipping shipment event because order is not in CONFIRMED/DONE state. orderId={}, status={}, paymentStatus={}",
+                    if (order.getStatus() != OrderStatus.CONFIRMED || order.getPaymentStatus() != PaymentStatus.SUCCESS) {
+                        log.warn("Skipping shipment event because order is not in CONFIRMED/SUCCESS state. orderId={}, status={}, paymentStatus={}",
                                 orderId, order.getStatus(), order.getPaymentStatus());
                         return;
                     }
