@@ -48,4 +48,12 @@ public class OrderController {
     ) {
         return ResponseEntity.ok(orderService.getOrdersByUserId(userId));
     }
+
+    @PostMapping("/{orderId}/cancel")
+    public ResponseEntity<OrderResponse> cancelOrder(
+            @PathVariable UUID orderId,
+            @RequestHeader(value = "Authorization", required = false) String authorization
+    ) {
+        return ResponseEntity.ok(orderService.cancelOrderByUser(orderId, authorization));
+    }
 }

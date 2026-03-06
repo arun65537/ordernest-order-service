@@ -10,15 +10,19 @@ import com.ordernest.order.entity.CustomerOrder;
 import com.ordernest.order.entity.OrderStatus;
 import com.ordernest.order.entity.PaymentStatus;
 import com.ordernest.order.entity.ShipmentStatus;
+import com.ordernest.order.event.OrderCancellationEvent;
+import com.ordernest.order.event.OrderCancellationEventType;
 import com.ordernest.order.event.PaymentEvent;
 import com.ordernest.order.event.PaymentEventType;
 import com.ordernest.order.event.ShipmentEvent;
 import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
+import com.ordernest.order.messaging.OrderCancellationEventPublisher;
 import com.ordernest.order.repository.OrderRepository;
 import com.ordernest.order.security.JwtService;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +38,7 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final InventoryClient inventoryClient;
     private final JwtService jwtService;
+    private final OrderCancellationEventPublisher orderCancellationEventPublisher;
 
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request, String authorization) {
@@ -78,6 +83,44 @@ public class OrderService {
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
+    }
+
+    @Transactional
+    public OrderResponse cancelOrderByUser(UUID orderId, String authorization) {
+        UUID userId = extractUserIdFromAuthorization(authorization);
+        CustomerOrder order = findById(orderId);
+
+        if (!userId.equals(order.getUserId())) {
+            throw new BadRequestException("Order does not belong to authenticated user");
+        }
+
+        OrderStatus previousOrderStatus = order.getStatus();
+
+        order.setStatus(OrderStatus.CANCELLED);
+
+        PaymentStatus currentPaymentStatus = order.getPaymentStatus();
+        if (currentPaymentStatus == PaymentStatus.SUCCESS) {
+            order.setPaymentStatus(PaymentStatus.REFUNDED);
+        } else if (currentPaymentStatus == PaymentStatus.REFUNDED) {
+            order.setPaymentStatus(PaymentStatus.REFUNDED);
+        } else {
+            order.setPaymentStatus(PaymentStatus.FAILED);
+        }
+
+        ShipmentStatus currentShipmentStatus = order.getShipmentStatus();
+        if (currentShipmentStatus == ShipmentStatus.NOT_CREATED) {
+            order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
+        } else {
+            order.setShipmentStatus(ShipmentStatus.RETURNED);
+        }
+
+        CustomerOrder saved = orderRepository.save(order);
+
+        if (previousOrderStatus != OrderStatus.CANCELLED) {
+            publishOrderCancellationEvent(saved, "User cancelled order");
+        }
+
+        return mapToResponse(saved);
     }
 
     @Transactional
@@ -129,12 +172,6 @@ public class OrderService {
 
         orderRepository.findById(orderId).ifPresentOrElse(
                 order -> {
-                    if (order.getStatus() != OrderStatus.CONFIRMED || order.getPaymentStatus() != PaymentStatus.SUCCESS) {
-                        log.warn("Skipping shipment event because order is not in CONFIRMED/SUCCESS state. orderId={}, status={}, paymentStatus={}",
-                                orderId, order.getStatus(), order.getPaymentStatus());
-                        return;
-                    }
-
                     ShipmentStatus current = order.getShipmentStatus();
                     ShipmentStatus next = shipmentEvent.shipmentStatus();
 
@@ -142,10 +179,17 @@ public class OrderService {
                         return;
                     }
 
+                    if (order.getStatus() != OrderStatus.CONFIRMED || order.getPaymentStatus() != PaymentStatus.SUCCESS) {
+                        log.warn("Skipping shipment event because order is not in CONFIRMED/SUCCESS state. orderId={}, status={}, paymentStatus={}",
+                                orderId, order.getStatus(), order.getPaymentStatus());
+                        return;
+                    }
+
                     boolean validTransition =
                             (current == ShipmentStatus.NOT_CREATED && next == ShipmentStatus.CREATED)
                                     || (current == ShipmentStatus.CREATED && next == ShipmentStatus.SHIPPED)
-                                    || (current == ShipmentStatus.SHIPPED && next == ShipmentStatus.DELIVERED);
+                                    || (current == ShipmentStatus.SHIPPED && next == ShipmentStatus.DELIVERED)
+                                    || (current == ShipmentStatus.DELIVERED && next == ShipmentStatus.RETURNED);
 
                     if (!validTransition) {
                         log.warn("Skipping invalid shipment transition. orderId={}, current={}, next={}", orderId, current, next);
@@ -153,10 +197,30 @@ public class OrderService {
                     }
 
                     order.setShipmentStatus(next);
+                    if (next == ShipmentStatus.RETURNED) {
+                        order.setStatus(OrderStatus.CANCELLED);
+                        order.setPaymentStatus(PaymentStatus.REFUNDED);
+                    }
                     orderRepository.save(order);
+
+                    if (next == ShipmentStatus.RETURNED) {
+                        publishOrderCancellationEvent(order, "Shipment returned");
+                    }
                 },
                 () -> log.warn("Shipment event received for unknown orderId: {}", orderId)
         );
+    }
+
+    private void publishOrderCancellationEvent(CustomerOrder order, String reason) {
+        OrderCancellationEvent event = new OrderCancellationEvent(
+                order.getProductId(),
+                order.getQuantity(),
+                order.getId().toString(),
+                OrderCancellationEventType.CANCALLED,
+                reason,
+                Instant.now()
+        );
+        orderCancellationEventPublisher.publish(event);
     }
 
     private CustomerOrder findById(UUID orderId) {
