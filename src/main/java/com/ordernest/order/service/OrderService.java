@@ -78,7 +78,8 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public List<OrderResponse> getOrdersByUserId(UUID userId) {
+    public List<OrderResponse> getMyOrders(String authorization) {
+        UUID userId = extractUserIdFromAuthorization(authorization);
         return orderRepository.findByUserIdOrderByCreatedAtDesc(userId)
                 .stream()
                 .map(this::mapToResponse)

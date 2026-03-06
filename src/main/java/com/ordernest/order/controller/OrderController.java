@@ -41,12 +41,11 @@ public class OrderController {
         return ResponseEntity.ok(orderService.getOrderById(orderId));
     }
 
-    @GetMapping("/user/{userId}")
-    public ResponseEntity<List<OrderResponse>> getOrdersByUserId(
-            @PathVariable UUID userId,
+    @GetMapping("/me")
+    public ResponseEntity<List<OrderResponse>> getMyOrders(
             @RequestHeader(value = "Authorization", required = false) String authorization
     ) {
-        return ResponseEntity.ok(orderService.getOrdersByUserId(userId));
+        return ResponseEntity.ok(orderService.getMyOrders(authorization));
     }
 
     @PostMapping("/{orderId}/cancel")
