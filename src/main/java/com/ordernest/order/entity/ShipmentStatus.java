@@ -4,5 +4,6 @@ public enum ShipmentStatus {
     NOT_CREATED,
     CREATED,
     SHIPPED,
-    DELIVERED
+    DELIVERED,
+    RETURNED
 }

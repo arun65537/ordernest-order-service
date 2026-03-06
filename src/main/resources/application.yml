@@ -40,6 +40,7 @@ app:
     topic:
       payment-events: ${PAYMENT_EVENTS_TOPIC:payment.events}
       shipment-events: ${SHIPMENT_EVENTS_TOPIC:shipment.events}
+      order-cancelled-events: ${ORDER_CANCELLED_EVENTS_TOPIC:order.cancelled.events}
     consumer:
       group-id: ${PAYMENT_EVENTS_CONSUMER_GROUP_ID:ordernest-order-service-payment-consumer}
       shipment-group-id: ${SHIPMENT_EVENTS_CONSUMER_GROUP_ID:ordernest-order-service-shipment-consumer}
