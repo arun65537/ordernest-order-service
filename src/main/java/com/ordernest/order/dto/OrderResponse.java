@@ -11,6 +11,7 @@ public record OrderResponse(
         OrderItemResponse item,
         OrderStatus status,
         PaymentStatus paymentStatus,
+        String razorpayPaymentId,
         ShipmentStatus shipmentStatus,
         Instant createdAt
 ) {

@@ -60,6 +60,9 @@ public class CustomerOrder {
     @Column
     private String currency;
 
+    @Column
+    private String razorpayPaymentId;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

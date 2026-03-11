@@ -141,6 +141,10 @@ public class OrderService {
 
         orderRepository.findById(orderId).ifPresentOrElse(
                 order -> {
+                    if (paymentEvent.paymentId() != null && !paymentEvent.paymentId().isBlank()) {
+                        order.setRazorpayPaymentId(paymentEvent.paymentId());
+                    }
+
                     if (paymentEvent.eventType() == PaymentEventType.PAYMENT_SUCCESS) {
                         order.setStatus(OrderStatus.CONFIRMED);
                         order.setPaymentStatus(PaymentStatus.SUCCESS);
@@ -235,6 +239,7 @@ public class OrderService {
                 new OrderItemResponse(order.getProductId(), order.getProductName(), order.getQuantity(), order.getTotalAmount(), order.getCurrency()),
                 order.getStatus(),
                 order.getPaymentStatus(),
+                order.getRazorpayPaymentId(),
                 order.getShipmentStatus(),
                 order.getCreatedAt()
         );
