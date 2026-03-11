@@ -101,7 +101,9 @@ public class OrderService {
 
         PaymentStatus currentPaymentStatus = order.getPaymentStatus();
         if (currentPaymentStatus == PaymentStatus.SUCCESS) {
-            order.setPaymentStatus(PaymentStatus.REFUNDED);
+            order.setPaymentStatus(PaymentStatus.REFUND_INITIATED);
+        } else if (currentPaymentStatus == PaymentStatus.REFUND_INITIATED) {
+            order.setPaymentStatus(PaymentStatus.REFUND_INITIATED);
         } else if (currentPaymentStatus == PaymentStatus.REFUNDED) {
             order.setPaymentStatus(PaymentStatus.REFUNDED);
         } else {
