@@ -154,6 +154,9 @@ public class OrderService {
                         order.setStatus(OrderStatus.CANCELLED);
                         order.setPaymentStatus(PaymentStatus.FAILED);
                         order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
+                    } else if (paymentEvent.eventType() == PaymentEventType.PAYMENT_REFUNDED) {
+                        order.setStatus(OrderStatus.CANCELLED);
+                        order.setPaymentStatus(PaymentStatus.REFUNDED);
                     }
 
                     orderRepository.save(order);
