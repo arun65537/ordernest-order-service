@@ -13,12 +13,14 @@ import com.ordernest.order.entity.PaymentStatus;
 import com.ordernest.order.entity.ShipmentStatus;
 import com.ordernest.order.event.OrderCancellationEvent;
 import com.ordernest.order.event.OrderCancellationEventType;
+import com.ordernest.order.event.OrderStatusEvent;
 import com.ordernest.order.event.PaymentEvent;
 import com.ordernest.order.event.PaymentEventType;
 import com.ordernest.order.event.ShipmentStatusEvent;
 import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
 import com.ordernest.order.messaging.OrderCancellationEventPublisher;
+import com.ordernest.order.messaging.OrderStatusEventPublisher;
 import com.ordernest.order.messaging.ShipmentStatusEventPublisher;
 import com.ordernest.order.repository.OrderRepository;
 import com.ordernest.order.security.JwtService;
@@ -43,6 +45,7 @@ public class OrderService {
     private final InventoryClient inventoryClient;
     private final JwtService jwtService;
     private final OrderCancellationEventPublisher orderCancellationEventPublisher;
+    private final OrderStatusEventPublisher orderStatusEventPublisher;
     private final ShipmentStatusEventPublisher shipmentStatusEventPublisher;
 
     @Transactional
@@ -74,6 +77,7 @@ public class OrderService {
         order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
 
         CustomerOrder saved = orderRepository.save(order);
+        publishOrderStatusChanged(saved, null, "Order created");
         return new CreateOrderResponse(saved.getId());
     }
 
@@ -126,6 +130,7 @@ public class OrderService {
 
         if (previousOrderStatus != OrderStatus.CANCELLED) {
             publishOrderCancellationEvent(saved, "User cancelled order");
+            publishOrderStatusChanged(saved, previousOrderStatus, "User cancelled order");
         }
 
         return mapToResponse(saved);
@@ -148,6 +153,7 @@ public class OrderService {
 
         orderRepository.findById(orderId).ifPresentOrElse(
                 order -> {
+                    OrderStatus previousStatus = order.getStatus();
                     if (paymentEvent.paymentId() != null && !paymentEvent.paymentId().isBlank()) {
                         order.setRazorpayPaymentId(paymentEvent.paymentId());
                     }
@@ -164,7 +170,8 @@ public class OrderService {
                         order.setPaymentStatus(PaymentStatus.REFUNDED);
                     }
 
-                    orderRepository.save(order);
+                    CustomerOrder saved = orderRepository.save(order);
+                    publishOrderStatusChanged(saved, previousStatus, resolvePaymentReason(paymentEvent));
                 },
                 () -> log.warn("Payment event received for unknown orderId: {}", orderId)
         );
@@ -217,8 +224,23 @@ public class OrderService {
 
         order.setShipmentStatus(next);
         if (next == ShipmentStatus.RETURNED) {
+            OrderStatus previousStatus = order.getStatus();
             order.setStatus(OrderStatus.CANCELLED);
             order.setPaymentStatus(PaymentStatus.REFUNDED);
+            CustomerOrder saved = orderRepository.save(order);
+
+            String updatedBy = jwtService.extractEmail(token);
+            ShipmentStatusEvent event = new ShipmentStatusEvent(
+                    saved.getId().toString(),
+                    next,
+                    updatedBy,
+                    Instant.now()
+            );
+            shipmentStatusEventPublisher.publish(event);
+
+            publishOrderCancellationEvent(saved, "Shipment returned");
+            publishOrderStatusChanged(saved, previousStatus, "Shipment returned");
+            return mapToResponse(saved);
         }
         CustomerOrder saved = orderRepository.save(order);
 
@@ -230,10 +252,6 @@ public class OrderService {
                 Instant.now()
         );
         shipmentStatusEventPublisher.publish(event);
-
-        if (next == ShipmentStatus.RETURNED) {
-            publishOrderCancellationEvent(saved, "Shipment returned");
-        }
 
         return mapToResponse(saved);
     }
@@ -248,6 +266,40 @@ public class OrderService {
                 Instant.now()
         );
         orderCancellationEventPublisher.publish(event);
+    }
+
+    private void publishOrderStatusChanged(CustomerOrder order, OrderStatus previousStatus, String reason) {
+        if (previousStatus != null && previousStatus == order.getStatus()) {
+            return;
+        }
+
+        OrderStatusEvent event = new OrderStatusEvent(
+                order.getId().toString(),
+                order.getUserId(),
+                order.getProductId(),
+                order.getProductName(),
+                order.getQuantity(),
+                order.getTotalAmount(),
+                order.getCurrency(),
+                previousStatus,
+                order.getStatus(),
+                order.getPaymentStatus(),
+                order.getShipmentStatus(),
+                reason,
+                Instant.now()
+        );
+        orderStatusEventPublisher.publish(event);
+    }
+
+    private String resolvePaymentReason(PaymentEvent paymentEvent) {
+        if (paymentEvent.reason() != null && !paymentEvent.reason().isBlank()) {
+            return paymentEvent.reason();
+        }
+        return switch (paymentEvent.eventType()) {
+            case PAYMENT_SUCCESS -> "Payment completed successfully";
+            case PAYMENT_FAILED -> "Payment failed";
+            case PAYMENT_REFUNDED -> "Payment refunded";
+        };
     }
 
     private CustomerOrder findById(UUID orderId) {
