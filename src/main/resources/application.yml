@@ -47,3 +47,12 @@ app:
       group-id: ordernest-order-service-payment-consumer
   inventory:
     base-url: ${INVENTORY_API_BASE_URL:http://localhost:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
