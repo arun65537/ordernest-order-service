@@ -22,8 +22,9 @@ public class ShipmentController {
     @PostMapping("/status")
     public ResponseEntity<OrderResponse> updateShipmentStatus(
             @Valid @RequestBody UpdateShipmentStatusRequest request,
-            @RequestHeader(value = "Authorization", required = false) String authorization
+            @RequestHeader(value = "X-User-Roles", required = false) String userRoles,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail
     ) {
-        return ResponseEntity.ok(orderService.updateShipmentStatusByAdmin(request, authorization));
+        return ResponseEntity.ok(orderService.updateShipmentStatusByAdmin(request, userRoles, userEmail));
     }
 }

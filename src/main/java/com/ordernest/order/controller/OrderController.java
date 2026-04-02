@@ -28,31 +28,30 @@ public class OrderController {
     @PostMapping
     public ResponseEntity<CreateOrderResponse> createOrder(
             @Valid @RequestBody CreateOrderRequest request,
-            @RequestHeader(value = "Authorization", required = false) String authorization
+            @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(orderService.createOrder(request, authorization));
+        return ResponseEntity.status(HttpStatus.CREATED).body(orderService.createOrder(request, userId));
     }
 
     @GetMapping("/{orderId}")
     public ResponseEntity<OrderResponse> getOrderById(
-            @PathVariable UUID orderId,
-            @RequestHeader(value = "Authorization", required = false) String authorization
+            @PathVariable UUID orderId
     ) {
         return ResponseEntity.ok(orderService.getOrderById(orderId));
     }
 
     @GetMapping("/me")
     public ResponseEntity<List<OrderResponse>> getMyOrders(
-            @RequestHeader(value = "Authorization", required = false) String authorization
+            @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
-        return ResponseEntity.ok(orderService.getMyOrders(authorization));
+        return ResponseEntity.ok(orderService.getMyOrders(userId));
     }
 
     @PostMapping("/{orderId}/cancel")
     public ResponseEntity<OrderResponse> cancelOrder(
             @PathVariable UUID orderId,
-            @RequestHeader(value = "Authorization", required = false) String authorization
+            @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
-        return ResponseEntity.ok(orderService.cancelOrderByUser(orderId, authorization));
+        return ResponseEntity.ok(orderService.cancelOrderByUser(orderId, userId));
     }
 }

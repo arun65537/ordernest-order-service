@@ -23,8 +23,6 @@ import com.ordernest.order.messaging.OrderCancellationEventPublisher;
 import com.ordernest.order.messaging.OrderStatusEventPublisher;
 import com.ordernest.order.messaging.ShipmentStatusEventPublisher;
 import com.ordernest.order.repository.OrderRepository;
-import com.ordernest.order.security.JwtService;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -43,15 +41,14 @@ public class OrderService {
 
     private final OrderRepository orderRepository;
     private final InventoryClient inventoryClient;
-    private final JwtService jwtService;
     private final OrderCancellationEventPublisher orderCancellationEventPublisher;
     private final OrderStatusEventPublisher orderStatusEventPublisher;
     private final ShipmentStatusEventPublisher shipmentStatusEventPublisher;
 
     @Transactional
-    public CreateOrderResponse createOrder(CreateOrderRequest request, String authorization) {
-        UUID userId = extractUserIdFromAuthorization(authorization);
-        InventoryProductResponse inventoryProduct = inventoryClient.getProductById(request.item().productId(), authorization);
+    public CreateOrderResponse createOrder(CreateOrderRequest request, String userIdHeader) {
+        UUID userId = extractUserId(userIdHeader);
+        InventoryProductResponse inventoryProduct = inventoryClient.getProductById(request.item().productId(), null);
         int available = inventoryProduct.availableQuantity() == null ? 0 : inventoryProduct.availableQuantity();
         int requested = request.item().quantity();
 
@@ -63,7 +60,7 @@ public class OrderService {
         BigDecimal totalAmount = unitPrice.multiply(BigDecimal.valueOf(requested));
 
         int updatedAvailableQuantity = available - requested;
-        inventoryClient.updateProductStock(request.item().productId(), updatedAvailableQuantity, authorization);
+        inventoryClient.updateProductStock(request.item().productId(), updatedAvailableQuantity, null);
 
         CustomerOrder order = new CustomerOrder();
         order.setUserId(userId);
@@ -87,8 +84,8 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public List<OrderResponse> getMyOrders(String authorization) {
-        UUID userId = extractUserIdFromAuthorization(authorization);
+    public List<OrderResponse> getMyOrders(String userIdHeader) {
+        UUID userId = extractUserId(userIdHeader);
         return orderRepository.findByUserIdOrderByCreatedAtDesc(userId)
                 .stream()
                 .map(this::mapToResponse)
@@ -96,8 +93,8 @@ public class OrderService {
     }
 
     @Transactional
-    public OrderResponse cancelOrderByUser(UUID orderId, String authorization) {
-        UUID userId = extractUserIdFromAuthorization(authorization);
+    public OrderResponse cancelOrderByUser(UUID orderId, String userIdHeader) {
+        UUID userId = extractUserId(userIdHeader);
         CustomerOrder order = findById(orderId);
 
         if (!userId.equals(order.getUserId())) {
@@ -178,14 +175,8 @@ public class OrderService {
     }
 
     @Transactional
-    public OrderResponse updateShipmentStatusByAdmin(UpdateShipmentStatusRequest request, String authorization) {
-        String token = extractBearerToken(authorization);
-        if (!jwtService.isTokenValid(token)) {
-            throw new AccessDeniedException("Invalid or expired token");
-        }
-
-        String normalizedRole = normalizeRole(jwtService.extractRole(token));
-        if (!"ROLE_ADMIN".equals(normalizedRole)) {
+    public OrderResponse updateShipmentStatusByAdmin(UpdateShipmentStatusRequest request, String userRolesHeader, String userEmailHeader) {
+        if (!isAdmin(userRolesHeader)) {
             throw new AccessDeniedException("Only admin can update shipment status");
         }
 
@@ -229,11 +220,10 @@ public class OrderService {
             order.setPaymentStatus(PaymentStatus.REFUNDED);
             CustomerOrder saved = orderRepository.save(order);
 
-            String updatedBy = jwtService.extractEmail(token);
             ShipmentStatusEvent event = new ShipmentStatusEvent(
                     saved.getId().toString(),
                     next,
-                    updatedBy,
+                    resolveActorEmail(userEmailHeader),
                     Instant.now()
             );
             shipmentStatusEventPublisher.publish(event);
@@ -244,11 +234,10 @@ public class OrderService {
         }
         CustomerOrder saved = orderRepository.save(order);
 
-        String updatedBy = jwtService.extractEmail(token);
         ShipmentStatusEvent event = new ShipmentStatusEvent(
                 saved.getId().toString(),
                 next,
-                updatedBy,
+                resolveActorEmail(userEmailHeader),
                 Instant.now()
         );
         shipmentStatusEventPublisher.publish(event);
@@ -319,35 +308,32 @@ public class OrderService {
         );
     }
 
-    private UUID extractUserIdFromAuthorization(String authorization) {
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw new BadRequestException("Missing or invalid Authorization header");
+    private UUID extractUserId(String userIdHeader) {
+        if (userIdHeader == null || userIdHeader.isBlank()) {
+            throw new BadRequestException("Missing user identity header");
         }
-
-        String token = authorization.substring(7);
         try {
-            UUID userId = jwtService.extractUserId(token);
-            if (userId == null) {
-                throw new BadRequestException("userId not found in token");
-            }
-            return userId;
+            return UUID.fromString(userIdHeader.trim());
         } catch (IllegalArgumentException ex) {
-            throw new BadRequestException("Invalid userId in token");
-        } catch (Exception ex) {
-            throw new BadRequestException("Unable to resolve userId from token");
+            throw new BadRequestException("Invalid user identity header");
         }
     }
 
-    private String extractBearerToken(String authorization) {
-        if (authorization == null || !authorization.startsWith("Bearer ")) {
-            throw new AccessDeniedException("Missing or invalid Authorization header");
+    private boolean isAdmin(String userRolesHeader) {
+        if (userRolesHeader == null || userRolesHeader.isBlank()) {
+            return false;
         }
-        return authorization.substring(7);
+
+        return List.of(userRolesHeader.split(","))
+                .stream()
+                .map(String::trim)
+                .map(this::normalizeRole)
+                .anyMatch("ROLE_ADMIN"::equals);
     }
 
     private String normalizeRole(String role) {
         if (role == null || role.isBlank()) {
-            throw new AccessDeniedException("Role claim missing in token");
+            return "";
         }
 
         String trimmedRole = role.trim().toUpperCase(Locale.ROOT);
@@ -355,5 +341,12 @@ public class OrderService {
             trimmedRole = "ROLE_" + trimmedRole;
         }
         return trimmedRole;
+    }
+
+    private String resolveActorEmail(String userEmailHeader) {
+        if (userEmailHeader == null || userEmailHeader.isBlank()) {
+            return "api-gateway";
+        }
+        return userEmailHeader.trim();
     }
 }

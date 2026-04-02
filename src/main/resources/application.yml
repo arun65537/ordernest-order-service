@@ -46,5 +46,3 @@ app:
       group-id: ${PAYMENT_EVENTS_CONSUMER_GROUP_ID:ordernest-order-service-payment-consumer}
   inventory:
     base-url: ${INVENTORY_API_BASE_URL:https://ordernest-inventory-service.onrender.com}
-  jwt:
-    secret: ${JWT_SECRET:change-me-in-prod-change-me-in-prod-change-me}
