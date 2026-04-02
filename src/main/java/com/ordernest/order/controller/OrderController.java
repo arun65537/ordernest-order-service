@@ -28,9 +28,10 @@ public class OrderController {
     @PostMapping
     public ResponseEntity<CreateOrderResponse> createOrder(
             @Valid @RequestBody CreateOrderRequest request,
-            @RequestHeader(value = "X-User-Id", required = false) String userId
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail
     ) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(orderService.createOrder(request, userId));
+        return ResponseEntity.status(HttpStatus.CREATED).body(orderService.createOrder(request, userId, userEmail));
     }
 
     @GetMapping("/{orderId}")
@@ -50,8 +51,9 @@ public class OrderController {
     @PostMapping("/{orderId}/cancel")
     public ResponseEntity<OrderResponse> cancelOrder(
             @PathVariable UUID orderId,
-            @RequestHeader(value = "X-User-Id", required = false) String userId
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail
     ) {
-        return ResponseEntity.ok(orderService.cancelOrderByUser(orderId, userId));
+        return ResponseEntity.ok(orderService.cancelOrderByUser(orderId, userId, userEmail));
     }
 }

@@ -31,6 +31,9 @@ public class CustomerOrder {
     @Column(nullable = false)
     private UUID userId;
 
+    @Column
+    private String userEmail;
+
     @Column(nullable = false)
     private UUID productId;
 

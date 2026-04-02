@@ -43,6 +43,7 @@ app:
       shipment-events: shipment.events
       order-cancelled-events: order.cancelled.events
       order-status-events: order.status.events
+      email-events: notification.email.events
     consumer:
       group-id: ordernest-order-service-payment-consumer
   inventory:

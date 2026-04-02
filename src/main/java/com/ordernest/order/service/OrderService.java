@@ -20,6 +20,7 @@ import com.ordernest.order.event.ShipmentStatusEvent;
 import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
 import com.ordernest.order.messaging.OrderCancellationEventPublisher;
+import com.ordernest.order.messaging.OrderStatusEmailPublisher;
 import com.ordernest.order.messaging.OrderStatusEventPublisher;
 import com.ordernest.order.messaging.ShipmentStatusEventPublisher;
 import com.ordernest.order.repository.OrderRepository;
@@ -43,11 +44,13 @@ public class OrderService {
     private final InventoryClient inventoryClient;
     private final OrderCancellationEventPublisher orderCancellationEventPublisher;
     private final OrderStatusEventPublisher orderStatusEventPublisher;
+    private final OrderStatusEmailPublisher orderStatusEmailPublisher;
     private final ShipmentStatusEventPublisher shipmentStatusEventPublisher;
 
     @Transactional
-    public CreateOrderResponse createOrder(CreateOrderRequest request, String userIdHeader) {
+    public CreateOrderResponse createOrder(CreateOrderRequest request, String userIdHeader, String userEmailHeader) {
         UUID userId = extractUserId(userIdHeader);
+        String userEmail = resolveUserEmail(userEmailHeader);
         InventoryProductResponse inventoryProduct = inventoryClient.getProductById(request.item().productId(), null);
         int available = inventoryProduct.availableQuantity() == null ? 0 : inventoryProduct.availableQuantity();
         int requested = request.item().quantity();
@@ -64,6 +67,7 @@ public class OrderService {
 
         CustomerOrder order = new CustomerOrder();
         order.setUserId(userId);
+        order.setUserEmail(userEmail);
         order.setProductId(request.item().productId());
         order.setProductName(inventoryProduct.name());
         order.setQuantity(requested);
@@ -93,9 +97,12 @@ public class OrderService {
     }
 
     @Transactional
-    public OrderResponse cancelOrderByUser(UUID orderId, String userIdHeader) {
+    public OrderResponse cancelOrderByUser(UUID orderId, String userIdHeader, String userEmailHeader) {
         UUID userId = extractUserId(userIdHeader);
         CustomerOrder order = findById(orderId);
+        if ((order.getUserEmail() == null || order.getUserEmail().isBlank()) && userEmailHeader != null && !userEmailHeader.isBlank()) {
+            order.setUserEmail(resolveUserEmail(userEmailHeader));
+        }
 
         if (!userId.equals(order.getUserId())) {
             throw new BadRequestException("Order does not belong to authenticated user");
@@ -278,6 +285,7 @@ public class OrderService {
                 Instant.now()
         );
         orderStatusEventPublisher.publish(event);
+        orderStatusEmailPublisher.publish(order, previousStatus, reason);
     }
 
     private String resolvePaymentReason(PaymentEvent paymentEvent) {
@@ -346,6 +354,13 @@ public class OrderService {
     private String resolveActorEmail(String userEmailHeader) {
         if (userEmailHeader == null || userEmailHeader.isBlank()) {
             return "api-gateway";
+        }
+        return userEmailHeader.trim();
+    }
+
+    private String resolveUserEmail(String userEmailHeader) {
+        if (userEmailHeader == null || userEmailHeader.isBlank()) {
+            return null;
         }
         return userEmailHeader.trim();
     }
