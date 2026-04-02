@@ -16,7 +16,6 @@ import com.ordernest.order.entity.PaymentStatus;
 import com.ordernest.order.entity.ShipmentStatus;
 import com.ordernest.order.event.OrderCancellationEvent;
 import com.ordernest.order.event.OrderCancellationEventType;
-import com.ordernest.order.event.OrderStatusEvent;
 import com.ordernest.order.event.PaymentEvent;
 import com.ordernest.order.event.PaymentEventType;
 import com.ordernest.order.event.ShipmentStatusEvent;
@@ -24,7 +23,6 @@ import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
 import com.ordernest.order.messaging.OrderCancellationEventPublisher;
 import com.ordernest.order.messaging.OrderStatusEmailPublisher;
-import com.ordernest.order.messaging.OrderStatusEventPublisher;
 import com.ordernest.order.messaging.ShipmentStatusEventPublisher;
 import com.ordernest.order.repository.OrderEventHistoryRepository;
 import com.ordernest.order.repository.OrderRepository;
@@ -51,7 +49,6 @@ public class OrderService {
     private final OrderEventHistoryRepository orderEventHistoryRepository;
     private final InventoryClient inventoryClient;
     private final OrderCancellationEventPublisher orderCancellationEventPublisher;
-    private final OrderStatusEventPublisher orderStatusEventPublisher;
     private final OrderStatusEmailPublisher orderStatusEmailPublisher;
     private final ShipmentStatusEventPublisher shipmentStatusEventPublisher;
     private final ObjectMapper objectMapper;
@@ -363,22 +360,6 @@ public class OrderService {
             return;
         }
 
-        OrderStatusEvent event = new OrderStatusEvent(
-                order.getId().toString(),
-                order.getUserId(),
-                order.getProductId(),
-                order.getProductName(),
-                order.getQuantity(),
-                order.getTotalAmount(),
-                order.getCurrency(),
-                previousStatus,
-                order.getStatus(),
-                order.getPaymentStatus(),
-                order.getShipmentStatus(),
-                reason,
-                Instant.now()
-        );
-        orderStatusEventPublisher.publish(event);
         orderStatusEmailPublisher.publish(order, previousStatus, reason);
         recordOrderEvent(
                 order,
