@@ -2,11 +2,15 @@
 
 Spring Boot order service for OrderNest.
 
-## Features
-- Create order (`POST /api/orders`)
-- Get order by order id (`GET /api/orders/{orderId}`)
-- Get orders by user id (`GET /api/orders/user/{userId}`)
-- Validates inventory availability through inventory service before creating order
+Local URL: `http://localhost:8082`  
+Live URL: `https://ordernest-order-service.onrender.com`  
+API Gateway URL: `https://ordernest-api-gateway.onrender.com`
+
+## What it does
+- Create and fetch orders
+- Cancel orders
+- Update shipment status (admin path)
+- Record full order event history and expose it via API
 
 ## Configuration
 `src/main/resources/application.yml`
@@ -17,10 +21,16 @@ Environment variables:
 - `DB_PASSWORD`
 - `INVENTORY_API_BASE_URL` (optional, default `https://ordernest-inventory-service.onrender.com`)
 
-## Create Order
-`POST /api/orders`
+## API
+Gateway base URL: `https://ordernest-api-gateway.onrender.com`
+- `POST /api/orders`
+- `GET /api/orders/{orderId}`
+- `GET /api/orders/me`
+- `POST /api/orders/{orderId}/cancel`
+- `GET /api/orders/{orderId}/events`
+- `POST /api/shipments/status` (admin)
 
-Request:
+Create order body:
 ```json
 {
   "item": {
@@ -37,8 +47,16 @@ Response (`201`):
 }
 ```
 
-## Get Order By Id
-`GET /api/orders/{orderId}`
+## Swagger
+- Local Swagger UI: `http://localhost:8082/swagger-ui/index.html`
+- Local OpenAPI JSON: `http://localhost:8082/v3/api-docs`
+- Live Swagger UI: `https://ordernest-order-service.onrender.com/swagger-ui/index.html`
+- Live OpenAPI JSON: `https://ordernest-order-service.onrender.com/v3/api-docs`
+- Use API Gateway URL for client calls: `https://ordernest-api-gateway.onrender.com`
 
-## Get Orders By User Id
-`GET /api/orders/user/{userId}`
+## Health
+- `http://localhost:8082/actuator/health`
+- `https://ordernest-order-service.onrender.com/actuator/health`
+
+## Postman
+- `postman/ordernest-order-service.postman_collection.json`

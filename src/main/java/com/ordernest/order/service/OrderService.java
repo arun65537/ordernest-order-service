@@ -4,10 +4,13 @@ import com.ordernest.order.client.InventoryClient;
 import com.ordernest.order.client.InventoryProductResponse;
 import com.ordernest.order.dto.CreateOrderRequest;
 import com.ordernest.order.dto.CreateOrderResponse;
+import com.ordernest.order.dto.OrderEventHistoryResponse;
 import com.ordernest.order.dto.OrderItemResponse;
 import com.ordernest.order.dto.OrderResponse;
 import com.ordernest.order.dto.UpdateShipmentStatusRequest;
 import com.ordernest.order.entity.CustomerOrder;
+import com.ordernest.order.entity.OrderEventHistory;
+import com.ordernest.order.entity.OrderEventType;
 import com.ordernest.order.entity.OrderStatus;
 import com.ordernest.order.entity.PaymentStatus;
 import com.ordernest.order.entity.ShipmentStatus;
@@ -23,11 +26,15 @@ import com.ordernest.order.messaging.OrderCancellationEventPublisher;
 import com.ordernest.order.messaging.OrderStatusEmailPublisher;
 import com.ordernest.order.messaging.OrderStatusEventPublisher;
 import com.ordernest.order.messaging.ShipmentStatusEventPublisher;
+import com.ordernest.order.repository.OrderEventHistoryRepository;
 import com.ordernest.order.repository.OrderRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,11 +48,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class OrderService {
 
     private final OrderRepository orderRepository;
+    private final OrderEventHistoryRepository orderEventHistoryRepository;
     private final InventoryClient inventoryClient;
     private final OrderCancellationEventPublisher orderCancellationEventPublisher;
     private final OrderStatusEventPublisher orderStatusEventPublisher;
     private final OrderStatusEmailPublisher orderStatusEmailPublisher;
     private final ShipmentStatusEventPublisher shipmentStatusEventPublisher;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request, String userIdHeader, String userEmailHeader) {
@@ -78,6 +87,18 @@ public class OrderService {
         order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
 
         CustomerOrder saved = orderRepository.save(order);
+        recordOrderEvent(
+                saved,
+                OrderEventType.ORDER_CREATED,
+                null,
+                saved.getStatus(),
+                saved.getUserEmail(),
+                "Order created",
+                Map.of(
+                        "paymentStatus", saved.getPaymentStatus().name(),
+                        "shipmentStatus", saved.getShipmentStatus().name()
+                )
+        );
         publishOrderStatusChanged(saved, null, "Order created");
         return new CreateOrderResponse(saved.getId());
     }
@@ -96,9 +117,38 @@ public class OrderService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<OrderEventHistoryResponse> getOrderEvents(UUID orderId, String userIdHeader, String userRolesHeader) {
+        CustomerOrder order = findById(orderId);
+        boolean admin = isAdmin(userRolesHeader);
+        if (!admin) {
+            UUID userId = extractUserId(userIdHeader);
+            if (!userId.equals(order.getUserId())) {
+                throw new AccessDeniedException("Only owner or admin can view order events");
+            }
+        }
+
+        return orderEventHistoryRepository.findByOrderIdOrderByOccurredAtAsc(orderId)
+                .stream()
+                .map(event -> new OrderEventHistoryResponse(
+                        event.getId(),
+                        event.getOrderId(),
+                        event.getUserId(),
+                        event.getEventType(),
+                        event.getPreviousStatus(),
+                        event.getCurrentStatus(),
+                        event.getActor(),
+                        event.getReason(),
+                        event.getPayloadJson(),
+                        event.getOccurredAt()
+                ))
+                .toList();
+    }
+
     @Transactional
     public OrderResponse cancelOrderByUser(UUID orderId, String userIdHeader, String userEmailHeader) {
         UUID userId = extractUserId(userIdHeader);
+        String actor = resolveActorEmail(userEmailHeader);
         CustomerOrder order = findById(orderId);
         if ((order.getUserEmail() == null || order.getUserEmail().isBlank()) && userEmailHeader != null && !userEmailHeader.isBlank()) {
             order.setUserEmail(resolveUserEmail(userEmailHeader));
@@ -133,7 +183,7 @@ public class OrderService {
         CustomerOrder saved = orderRepository.save(order);
 
         if (previousOrderStatus != OrderStatus.CANCELLED) {
-            publishOrderCancellationEvent(saved, "User cancelled order");
+            publishOrderCancellationEvent(saved, "User cancelled order", actor);
             publishOrderStatusChanged(saved, previousOrderStatus, "User cancelled order");
         }
 
@@ -175,6 +225,19 @@ public class OrderService {
                     }
 
                     CustomerOrder saved = orderRepository.save(order);
+                    recordOrderEvent(
+                            saved,
+                            resolvePaymentEventType(paymentEvent.eventType()),
+                            previousStatus,
+                            saved.getStatus(),
+                            "payment-service",
+                            resolvePaymentReason(paymentEvent),
+                            Map.of(
+                                    "paymentStatus", saved.getPaymentStatus().name(),
+                                    "shipmentStatus", saved.getShipmentStatus().name(),
+                                    "paymentId", saved.getRazorpayPaymentId() == null ? "" : saved.getRazorpayPaymentId()
+                            )
+                    );
                     publishOrderStatusChanged(saved, previousStatus, resolvePaymentReason(paymentEvent));
                 },
                 () -> log.warn("Payment event received for unknown orderId: {}", orderId)
@@ -199,6 +262,7 @@ public class OrderService {
         }
 
         CustomerOrder order = findById(orderId);
+        String actor = resolveActorEmail(userEmailHeader);
         ShipmentStatus current = order.getShipmentStatus();
         ShipmentStatus next = request.shipmentStatus();
 
@@ -230,12 +294,21 @@ public class OrderService {
             ShipmentStatusEvent event = new ShipmentStatusEvent(
                     saved.getId().toString(),
                     next,
-                    resolveActorEmail(userEmailHeader),
+                    actor,
                     Instant.now()
             );
             shipmentStatusEventPublisher.publish(event);
 
-            publishOrderCancellationEvent(saved, "Shipment returned");
+            recordOrderEvent(
+                    saved,
+                    resolveShipmentEventType(next),
+                    previousStatus,
+                    saved.getStatus(),
+                    actor,
+                    "Shipment status updated by admin",
+                    Map.of("shipmentStatus", next.name())
+            );
+            publishOrderCancellationEvent(saved, "Shipment returned", actor);
             publishOrderStatusChanged(saved, previousStatus, "Shipment returned");
             return mapToResponse(saved);
         }
@@ -244,15 +317,24 @@ public class OrderService {
         ShipmentStatusEvent event = new ShipmentStatusEvent(
                 saved.getId().toString(),
                 next,
-                resolveActorEmail(userEmailHeader),
+                actor,
                 Instant.now()
         );
         shipmentStatusEventPublisher.publish(event);
+        recordOrderEvent(
+                saved,
+                resolveShipmentEventType(next),
+                saved.getStatus(),
+                saved.getStatus(),
+                actor,
+                "Shipment status updated by admin",
+                Map.of("shipmentStatus", next.name())
+        );
 
         return mapToResponse(saved);
     }
 
-    private void publishOrderCancellationEvent(CustomerOrder order, String reason) {
+    private void publishOrderCancellationEvent(CustomerOrder order, String reason, String actor) {
         OrderCancellationEvent event = new OrderCancellationEvent(
                 order.getProductId(),
                 order.getQuantity(),
@@ -262,6 +344,18 @@ public class OrderService {
                 Instant.now()
         );
         orderCancellationEventPublisher.publish(event);
+        recordOrderEvent(
+                order,
+                OrderEventType.ORDER_CANCELLED,
+                null,
+                order.getStatus(),
+                actor,
+                reason,
+                Map.of(
+                        "paymentStatus", order.getPaymentStatus().name(),
+                        "shipmentStatus", order.getShipmentStatus().name()
+                )
+        );
     }
 
     private void publishOrderStatusChanged(CustomerOrder order, OrderStatus previousStatus, String reason) {
@@ -286,6 +380,82 @@ public class OrderService {
         );
         orderStatusEventPublisher.publish(event);
         orderStatusEmailPublisher.publish(order, previousStatus, reason);
+        recordOrderEvent(
+                order,
+                OrderEventType.ORDER_STATUS_CHANGED,
+                previousStatus,
+                order.getStatus(),
+                "order-service",
+                reason,
+                Map.of(
+                        "paymentStatus", order.getPaymentStatus().name(),
+                        "shipmentStatus", order.getShipmentStatus().name()
+                )
+        );
+
+        if (order.getUserEmail() != null && !order.getUserEmail().isBlank()) {
+            recordOrderEvent(
+                    order,
+                    OrderEventType.EMAIL_NOTIFICATION_QUEUED,
+                    previousStatus,
+                    order.getStatus(),
+                    "order-service",
+                    "Order status change email queued",
+                    Map.of(
+                            "to", order.getUserEmail(),
+                            "subject", "Order " + order.getId() + " status: " + order.getStatus()
+                    )
+            );
+        }
+    }
+
+    private OrderEventType resolvePaymentEventType(PaymentEventType paymentEventType) {
+        return switch (paymentEventType) {
+            case PAYMENT_SUCCESS -> OrderEventType.PAYMENT_SUCCESS;
+            case PAYMENT_FAILED -> OrderEventType.PAYMENT_FAILED;
+            case PAYMENT_REFUNDED -> OrderEventType.PAYMENT_REFUNDED;
+        };
+    }
+
+    private OrderEventType resolveShipmentEventType(ShipmentStatus shipmentStatus) {
+        return switch (shipmentStatus) {
+            case CREATED -> OrderEventType.SHIPMENT_CREATED;
+            case SHIPPED -> OrderEventType.SHIPMENT_SHIPPED;
+            case DELIVERED -> OrderEventType.SHIPMENT_DELIVERED;
+            case RETURNED -> OrderEventType.SHIPMENT_RETURNED;
+            case NOT_CREATED -> OrderEventType.SHIPMENT_CREATED;
+        };
+    }
+
+    private void recordOrderEvent(
+            CustomerOrder order,
+            OrderEventType eventType,
+            OrderStatus previousStatus,
+            OrderStatus currentStatus,
+            String actor,
+            String reason,
+            Map<String, Object> payload
+    ) {
+        OrderEventHistory event = new OrderEventHistory();
+        event.setOrderId(order.getId());
+        event.setUserId(order.getUserId());
+        event.setEventType(eventType.name());
+        event.setPreviousStatus(previousStatus);
+        event.setCurrentStatus(currentStatus);
+        event.setActor(actor);
+        event.setReason(reason);
+        event.setPayloadJson(toJson(payload));
+        event.setOccurredAt(Instant.now());
+        orderEventHistoryRepository.save(event);
+    }
+
+    private String toJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException ex) {
+            log.warn("Failed to serialize order event payload, storing fallback text", ex);
+            return payload.toString();
+        }
     }
 
     private String resolvePaymentReason(PaymentEvent paymentEvent) {

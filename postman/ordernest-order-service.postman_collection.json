@@ -1,0 +1,92 @@
+{
+  "info": {
+    "name": "ordernest-order-service",
+    "_postman_id": "9ff7f90f-35fb-46a7-b0d3-7bf1f5f76771",
+    "description": "Order service APIs (call through API Gateway base URL).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"item\": {\n    \"productId\": \"89b0d676-99a9-420e-ad43-39f57284e64a\",\n    \"quantity\": 2\n  }\n}"
+        },
+        "url": "{{baseUrl}}/api/orders"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Order By Id",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+        ],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}"
+      },
+      "response": []
+    },
+    {
+      "name": "Get My Orders",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+        ],
+        "url": "{{baseUrl}}/api/orders/me"
+      },
+      "response": []
+    },
+    {
+      "name": "Cancel Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+        ],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}/cancel"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Order Event History",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}", "type": "text" }
+        ],
+        "url": "{{baseUrl}}/api/orders/{{orderId}}/events"
+      },
+      "response": []
+    },
+    {
+      "name": "Admin Update Shipment Status",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{adminAccessToken}}", "type": "text" },
+          { "key": "Content-Type", "value": "application/json", "type": "text" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"shipmentStatus\": \"SHIPPED\"\n}"
+        },
+        "url": "{{baseUrl}}/api/shipments/status"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "https://ordernest-api-gateway.onrender.com" },
+    { "key": "accessToken", "value": "" },
+    { "key": "adminAccessToken", "value": "" },
+    { "key": "orderId", "value": "" }
+  ]
+}
