@@ -40,9 +40,7 @@ app:
   kafka:
     topic:
       payment-events: payment.events
-      shipment-events: shipment.events
-      order-cancelled-events: order.cancelled.events
-      email-events: notification.email.events
+      order-status-events: order.status.events
     consumer:
       group-id: ordernest-order-service-payment-consumer
   inventory:

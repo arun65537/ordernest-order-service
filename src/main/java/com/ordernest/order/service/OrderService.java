@@ -14,16 +14,12 @@ import com.ordernest.order.entity.OrderEventType;
 import com.ordernest.order.entity.OrderStatus;
 import com.ordernest.order.entity.PaymentStatus;
 import com.ordernest.order.entity.ShipmentStatus;
-import com.ordernest.order.event.OrderCancellationEvent;
-import com.ordernest.order.event.OrderCancellationEventType;
+import com.ordernest.order.event.OrderStatusChangedEvent;
 import com.ordernest.order.event.PaymentEvent;
 import com.ordernest.order.event.PaymentEventType;
-import com.ordernest.order.event.ShipmentStatusEvent;
 import com.ordernest.order.exception.BadRequestException;
 import com.ordernest.order.exception.ResourceNotFoundException;
-import com.ordernest.order.messaging.OrderCancellationEventPublisher;
-import com.ordernest.order.messaging.OrderStatusEmailPublisher;
-import com.ordernest.order.messaging.ShipmentStatusEventPublisher;
+import com.ordernest.order.messaging.OrderStatusChangedEventPublisher;
 import com.ordernest.order.repository.OrderEventHistoryRepository;
 import com.ordernest.order.repository.OrderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -48,9 +44,7 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final OrderEventHistoryRepository orderEventHistoryRepository;
     private final InventoryClient inventoryClient;
-    private final OrderCancellationEventPublisher orderCancellationEventPublisher;
-    private final OrderStatusEmailPublisher orderStatusEmailPublisher;
-    private final ShipmentStatusEventPublisher shipmentStatusEventPublisher;
+    private final OrderStatusChangedEventPublisher orderStatusChangedEventPublisher;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -84,18 +78,6 @@ public class OrderService {
         order.setShipmentStatus(ShipmentStatus.NOT_CREATED);
 
         CustomerOrder saved = orderRepository.save(order);
-        recordOrderEvent(
-                saved,
-                OrderEventType.ORDER_CREATED,
-                null,
-                saved.getStatus(),
-                saved.getUserEmail(),
-                "Order created",
-                Map.of(
-                        "paymentStatus", saved.getPaymentStatus().name(),
-                        "shipmentStatus", saved.getShipmentStatus().name()
-                )
-        );
         publishOrderStatusChanged(saved, null, "Order created");
         return new CreateOrderResponse(saved.getId());
     }
@@ -145,7 +127,6 @@ public class OrderService {
     @Transactional
     public OrderResponse cancelOrderByUser(UUID orderId, String userIdHeader, String userEmailHeader) {
         UUID userId = extractUserId(userIdHeader);
-        String actor = resolveActorEmail(userEmailHeader);
         CustomerOrder order = findById(orderId);
         if ((order.getUserEmail() == null || order.getUserEmail().isBlank()) && userEmailHeader != null && !userEmailHeader.isBlank()) {
             order.setUserEmail(resolveUserEmail(userEmailHeader));
@@ -180,7 +161,6 @@ public class OrderService {
         CustomerOrder saved = orderRepository.save(order);
 
         if (previousOrderStatus != OrderStatus.CANCELLED) {
-            publishOrderCancellationEvent(saved, "User cancelled order", actor);
             publishOrderStatusChanged(saved, previousOrderStatus, "User cancelled order");
         }
 
@@ -247,16 +227,8 @@ public class OrderService {
             throw new AccessDeniedException("Only admin can update shipment status");
         }
 
-        if (request == null || request.orderId() == null || request.shipmentStatus() == null) {
-            throw new BadRequestException("orderId and shipmentStatus are required");
-        }
-
-        UUID orderId;
-        try {
-            orderId = UUID.fromString(request.orderId().trim());
-        } catch (IllegalArgumentException ex) {
-            throw new BadRequestException("Invalid orderId");
-        }
+        validateShipmentUpdateRequest(request);
+        UUID orderId = parseOrderId(request.orderId());
 
         CustomerOrder order = findById(orderId);
         String actor = resolveActorEmail(userEmailHeader);
@@ -267,10 +239,57 @@ public class OrderService {
             return mapToResponse(order);
         }
 
+        ensureOrderReadyForShipmentUpdate(order);
+        ensureValidShipmentTransition(current, next);
+
+        order.setShipmentStatus(next);
+
+        boolean returned = next == ShipmentStatus.RETURNED;
+        OrderStatus previousStatus = order.getStatus();
+        if (returned) {
+            order.setStatus(OrderStatus.CANCELLED);
+            order.setPaymentStatus(PaymentStatus.REFUNDED);
+        }
+
+        CustomerOrder saved = orderRepository.save(order);
+        recordOrderEvent(
+                saved,
+                resolveShipmentEventType(next),
+                previousStatus,
+                saved.getStatus(),
+                actor,
+                "Shipment status updated by admin",
+                Map.of("shipmentStatus", next.name())
+        );
+
+        if (returned) {
+            publishOrderStatusChanged(saved, previousStatus, "Shipment returned");
+        }
+
+        return mapToResponse(saved);
+    }
+
+    private void validateShipmentUpdateRequest(UpdateShipmentStatusRequest request) {
+        if (request == null || request.orderId() == null || request.shipmentStatus() == null) {
+            throw new BadRequestException("orderId and shipmentStatus are required");
+        }
+    }
+
+    private UUID parseOrderId(String orderIdRaw) {
+        try {
+            return UUID.fromString(orderIdRaw.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestException("Invalid orderId");
+        }
+    }
+
+    private void ensureOrderReadyForShipmentUpdate(CustomerOrder order) {
         if (order.getStatus() != OrderStatus.CONFIRMED || order.getPaymentStatus() != PaymentStatus.SUCCESS) {
             throw new BadRequestException("Order must be CONFIRMED with successful payment before shipment updates");
         }
+    }
 
+    private void ensureValidShipmentTransition(ShipmentStatus current, ShipmentStatus next) {
         boolean validTransition =
                 (current == ShipmentStatus.NOT_CREATED && next == ShipmentStatus.CREATED)
                         || (current == ShipmentStatus.CREATED && next == ShipmentStatus.SHIPPED)
@@ -280,79 +299,6 @@ public class OrderService {
         if (!validTransition) {
             throw new BadRequestException("Invalid shipment transition from " + current + " to " + next);
         }
-
-        order.setShipmentStatus(next);
-        if (next == ShipmentStatus.RETURNED) {
-            OrderStatus previousStatus = order.getStatus();
-            order.setStatus(OrderStatus.CANCELLED);
-            order.setPaymentStatus(PaymentStatus.REFUNDED);
-            CustomerOrder saved = orderRepository.save(order);
-
-            ShipmentStatusEvent event = new ShipmentStatusEvent(
-                    saved.getId().toString(),
-                    next,
-                    actor,
-                    Instant.now()
-            );
-            shipmentStatusEventPublisher.publish(event);
-
-            recordOrderEvent(
-                    saved,
-                    resolveShipmentEventType(next),
-                    previousStatus,
-                    saved.getStatus(),
-                    actor,
-                    "Shipment status updated by admin",
-                    Map.of("shipmentStatus", next.name())
-            );
-            publishOrderCancellationEvent(saved, "Shipment returned", actor);
-            publishOrderStatusChanged(saved, previousStatus, "Shipment returned");
-            return mapToResponse(saved);
-        }
-        CustomerOrder saved = orderRepository.save(order);
-
-        ShipmentStatusEvent event = new ShipmentStatusEvent(
-                saved.getId().toString(),
-                next,
-                actor,
-                Instant.now()
-        );
-        shipmentStatusEventPublisher.publish(event);
-        recordOrderEvent(
-                saved,
-                resolveShipmentEventType(next),
-                saved.getStatus(),
-                saved.getStatus(),
-                actor,
-                "Shipment status updated by admin",
-                Map.of("shipmentStatus", next.name())
-        );
-
-        return mapToResponse(saved);
-    }
-
-    private void publishOrderCancellationEvent(CustomerOrder order, String reason, String actor) {
-        OrderCancellationEvent event = new OrderCancellationEvent(
-                order.getProductId(),
-                order.getQuantity(),
-                order.getId().toString(),
-                OrderCancellationEventType.CANCALLED,
-                reason,
-                Instant.now()
-        );
-        orderCancellationEventPublisher.publish(event);
-        recordOrderEvent(
-                order,
-                OrderEventType.ORDER_CANCELLED,
-                null,
-                order.getStatus(),
-                actor,
-                reason,
-                Map.of(
-                        "paymentStatus", order.getPaymentStatus().name(),
-                        "shipmentStatus", order.getShipmentStatus().name()
-                )
-        );
     }
 
     private void publishOrderStatusChanged(CustomerOrder order, OrderStatus previousStatus, String reason) {
@@ -360,7 +306,23 @@ public class OrderService {
             return;
         }
 
-        orderStatusEmailPublisher.publish(order, previousStatus, reason);
+        OrderStatusChangedEvent event = new OrderStatusChangedEvent(
+                order.getId().toString(),
+                order.getUserId(),
+                order.getUserEmail(),
+                order.getProductId(),
+                order.getProductName(),
+                order.getQuantity(),
+                order.getTotalAmount(),
+                order.getCurrency(),
+                previousStatus,
+                order.getStatus(),
+                order.getPaymentStatus(),
+                order.getShipmentStatus(),
+                reason,
+                Instant.now()
+        );
+        orderStatusChangedEventPublisher.publish(event);
         recordOrderEvent(
                 order,
                 OrderEventType.ORDER_STATUS_CHANGED,
@@ -373,21 +335,6 @@ public class OrderService {
                         "shipmentStatus", order.getShipmentStatus().name()
                 )
         );
-
-        if (order.getUserEmail() != null && !order.getUserEmail().isBlank()) {
-            recordOrderEvent(
-                    order,
-                    OrderEventType.EMAIL_NOTIFICATION_QUEUED,
-                    previousStatus,
-                    order.getStatus(),
-                    "order-service",
-                    "Order status change email queued",
-                    Map.of(
-                            "to", order.getUserEmail(),
-                            "subject", "Order " + order.getId() + " status: " + order.getStatus()
-                    )
-            );
-        }
     }
 
     private OrderEventType resolvePaymentEventType(PaymentEventType paymentEventType) {
